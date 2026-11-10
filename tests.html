@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tests — No Pain No Gain</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;background:#0f1113;color:#f2f3f1;max-width:760px;margin:0 auto;padding:20px}
+h1{font-size:20px} .ok{color:#c8f34a} .ko{color:#ff6b5b;font-weight:700} li{margin:2px 0;list-style:none}
+#sum{font-size:18px;font-weight:700;margin:14px 0}
+</style>
+</head>
+<body>
+<h1>Tests unitaires</h1>
+<p>Ouvre cette page dans un navigateur : les tests tournent tout seuls (aucun outil à installer).</p>
+<div id="sum">…</div>
+<ul id="out"></ul>
+<script>
+// Doubles minimalistes pour les fonctions qui lisent l'état global
+var state={profile:{poids:"80",sexe:"h",age:"30",goal:"hypertrophie",level:"2",equip:"salle"},sessions:[]};
+</script>
+<script src="js/data.js"></script>
+<script src="js/lib.js"></script>
+<script>
+let pass=0, fail=0;
+function t(name,fn){
+  const li=document.createElement("li");
+  try{ fn(); pass++; li.className="ok"; li.textContent="✓ "+name; }
+  catch(e){ fail++; li.className="ko"; li.textContent="✗ "+name+" — "+e.message; }
+  document.getElementById("out").appendChild(li);
+}
+const eq=(a,b,m)=>{ if(JSON.stringify(a)!==JSON.stringify(b)) throw new Error((m||"")+" attendu "+JSON.stringify(b)+", obtenu "+JSON.stringify(a)); };
+const near=(a,b,tol,m)=>{ if(Math.abs(a-b)>tol) throw new Error((m||"")+" attendu ≈"+b+", obtenu "+a); };
+const truthy=(v,m)=>{ if(!v) throw new Error(m||"valeur fausse"); };
+const mkSession=(over)=>Object.assign({id:"s1",date:Date.now(),title:"Test",goal:"hypertrophie",exercises:[{exId:"dc_barre",name:"Développé couché",sets:[{kg:80,reps:8,done:true},{kg:80,reps:6,done:true}]}]},over);
+
+/* --- e1rm / fmtKg / esc --- */
+t("e1rm : 1 rep = poids ×1,033",()=>near(e1rm(100,1),103.33,0.01));
+t("e1rm : 100 kg × 10 reps ≈ 133",()=>near(e1rm(100,10),133.33,0.01));
+t("fmtKg : virgule française et 1 décimale",()=>{ eq(fmtKg(72.5),"72,5"); eq(fmtKg(80),"80"); eq(fmtKg(72.54),"72,5"); });
+t("esc : échappe & < > \" '",()=>eq(esc(`<a href="x" onclick='y'>&`),"&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;"));
+t("esc : null/undefined donnent une chaîne vide",()=>{ eq(esc(null),""); eq(esc(undefined),""); });
+t("shuffle : garde les éléments, ne modifie pas l'original",()=>{ const a=[1,2,3,4,5]; const b=shuffle(a); eq(a,[1,2,3,4,5]); eq(b.slice().sort(),[1,2,3,4,5]); });
+
+/* --- bibliothèque d'exercices --- */
+t("EX : ids uniques",()=>{ const ids=EX.map(e=>e.id); eq(new Set(ids).size,ids.length); });
+t("EX : chaque exercice a nom, muscle connu, équipement et niveau valides",()=>{
+  for(const e of EX){ truthy(e.n,e.id+" sans nom"); truthy(MUSCLE_LABEL[e.m],e.id+" muscle inconnu "+e.m); truthy(EQ_LABEL[e.eq],e.id+" équipement inconnu"); truthy([1,2,3].includes(e.lv),e.id+" niveau invalide"); }
+});
+t("normMuscles : anciens noms convertis, sans doublon",()=>{
+  eq(normMuscles(["epaules","delt_ant"]),["delt_ant","delt_lat","delt_post"]);
+  eq(normMuscles(["trapezes"]),["trap_sup","trap_moy","trap_inf"]);
+  eq(normMuscles("x"),"x");
+});
+
+/* --- prescription --- */
+t("prescription : hypertrophie, polyarticulaire, niveau 2 → 4 séries 6-10",()=>{
+  const ex=EX.find(e=>e.t==="c"&&!e.time); const p=prescription(ex,{goal:"hypertrophie",level:"2"});
+  eq(p.sets,4); eq(p.reps,[6,10]); eq(p.rest,120);
+});
+t("prescription : débutant a une série de moins",()=>{
+  const ex=EX.find(e=>e.t==="c"&&!e.time); eq(prescription(ex,{goal:"hypertrophie",level:"1"}).sets,3);
+});
+t("prescription : avancé a une série de plus sur les polyarticulaires",()=>{
+  const ex=EX.find(e=>e.t==="c"&&!e.time); eq(prescription(ex,{goal:"hypertrophie",level:"3"}).sets,5);
+});
+t("prescription : +15 s de repos à partir de 50 ans",()=>{
+  const ex=EX.find(e=>e.t==="c"&&!e.time); state.profile.age="55"; const r=prescription(ex,{goal:"force",level:"2"}).rest; state.profile.age="30"; eq(r,195);
+});
+t("prescription : exercice chronométré → 30-60 s",()=>{
+  const ex=EX.find(e=>e.time); if(!ex) return; eq(prescription(ex,{goal:"force",level:"2"}).reps,[30,60]);
+});
+
+/* --- récupération musculaire --- */
+t("recovery : sans séance, tout est à 100 %",()=>{ state.sessions=[]; const r=recovery(); for(const m of MAJOR) eq(r[m],100,m); });
+t("recovery : une séance de pecs fatigue les pecs, pas les mollets",()=>{
+  state.sessions=[mkSession({date:Date.now()-3600e3})]; const r=recovery();
+  truthy(r.pectoraux<100,"pectoraux non fatigués"); eq(r.mollets,100);
+});
+t("recovery : une séance de plus de 72 h est ignorée",()=>{
+  state.sessions=[mkSession({date:Date.now()-80*3600e3})]; eq(recovery().pectoraux,100);
+});
+t("recovery : plus la séance est récente, plus la fatigue est forte",()=>{
+  state.sessions=[mkSession({date:Date.now()-2*3600e3})]; const a=recovery().pectoraux;
+  state.sessions=[mkSession({date:Date.now()-48*3600e3})]; const b=recovery().pectoraux;
+  truthy(a<b,"récent="+a+" ancien="+b);
+});
+t("recovery : valeurs bornées entre 0 et 100",()=>{
+  state.sessions=Array.from({length:6},(_,i)=>mkSession({id:"x"+i,date:Date.now()-3600e3})); const r=recovery();
+  for(const m of MAJOR) truthy(r[m]>=0&&r[m]<=100,m);
+});
+
+/* --- score de force --- */
+t("strengthScore : sans poids → null",()=>{ state.profile.poids=""; eq(strengthScore(),null); state.profile.poids="80"; });
+t("strengthScore : sans séance → score null",()=>{ state.sessions=[]; eq(strengthScore().score,null); });
+t("strengthScore : le développé couché donne un score entre 1 et 100",()=>{
+  state.sessions=[mkSession()]; const s=strengthScore(); truthy(s.score>0&&s.score<=100,"score="+s.score); eq(s.parts[0].name,"Développé couché");
+});
+t("strengthScore : plus lourd = score plus haut (ou égal au plafond)",()=>{
+  state.sessions=[mkSession()]; const a=strengthScore().score;
+  state.sessions=[mkSession({exercises:[{exId:"dc_barre",name:"x",sets:[{kg:120,reps:5,done:true}]}]})]; const b=strengthScore().score;
+  truthy(b>=a,a+" → "+b);
+});
+t("strengthScore : les séries de plus de 15 reps sont ignorées",()=>{
+  state.sessions=[mkSession({exercises:[{exId:"dc_barre",name:"x",sets:[{kg:60,reps:20,done:true}]}]})]; eq(strengthScore().score,null);
+});
+
+/* --- données : migration, import, CSV --- */
+t("migrateData : v1 → version courante",()=>eq(migrateData({profile:{}}).v,DATA_VERSION));
+t("migrateData : entrée invalide → objet vide",()=>{ eq(migrateData(null),{}); eq(migrateData([]),{}); eq(migrateData("x"),{}); });
+t("parseImport : sauvegarde valide acceptée",()=>{
+  const d=parseImport(JSON.stringify({app:"no-pain-no-gain",version:2,data:{profile:{poids:"80"},sessions:[mkSession()]}}));
+  eq(d.sessions.length,1); eq(d.profile.poids,"80");
+});
+t("parseImport : JSON invalide refusé",()=>{ let ok=false; try{ parseImport("{pas du json"); }catch(e){ ok=/JSON/.test(e.message); } truthy(ok); });
+t("parseImport : mauvais fichier refusé",()=>{ let ok=false; try{ parseImport('{"foo":1}'); }catch(e){ ok=/sauvegarde/.test(e.message); } truthy(ok); });
+t("parseImport : séance corrompue refusée",()=>{
+  let ok=false; try{ parseImport(JSON.stringify({app:"no-pain-no-gain",data:{profile:{},sessions:[{id:1}]}})); }catch(e){ ok=/corrompues/.test(e.message); } truthy(ok);
+});
+t("csvCell : échappe guillemets, points-virgules et retours à la ligne",()=>{
+  eq(csvCell('a"b'),'"a""b"'); eq(csvCell("a;b"),'"a;b"'); eq(csvCell("a\nb"),'"a\nb"'); eq(csvCell("ok"),"ok"); eq(csvCell(null),"");
+});
+t("sessionsToCsv : en-tête + une ligne par série",()=>{
+  const lines=sessionsToCsv([mkSession({note:"top; ok"})]).replace(/^﻿/,"").split("\r\n");
+  eq(lines.length,3); truthy(lines[0].startsWith("date;"),"en-tête"); truthy(lines[1].includes(";80;8;"),"ligne 1"); truthy(lines[1].includes('"top; ok"'),"note échappée");
+});
+
+document.getElementById("sum").textContent=(fail?"❌ ":"✅ ")+pass+" réussis, "+fail+" échoués";
+document.getElementById("sum").className=fail?"ko":"ok";
+</script>
+</body>
+</html>

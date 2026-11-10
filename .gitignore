@@ -1,0 +1,9 @@
+# Éditeurs / système
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+# Fichiers de travail
+*.tmp
+.claude/
